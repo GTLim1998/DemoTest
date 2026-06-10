@@ -12,3 +12,38 @@ Content-Type: application/json
   "text": "Hello, API!",
   "states": []
 }
+
+###
+
+POST {{WebApplication1_HostAddress}}/api/bundles/schedule-suggestion
+Content-Type: application/json
+
+{
+  "bundles": [
+    {
+      "bundle_id": "bndl_101",
+      "title": "Plumbing Rough-In & Fixtures",
+      "trade": "plumber",
+      "trade_display": "Plumber",
+      "line_work_ids": [
+        "LW-204-011",
+        "LW-204-012",
+        "LW-204-013",
+        "LW-204-014"
+      ]
+    },
+    {
+      "bundle_id": "bndl_102",
+      "title": "Waterproofing & Tiling",
+      "trade": "tiler",
+      "trade_display": "Tiler",
+      "line_work_ids": [
+        "LW-204-021",
+        "LW-204-022",
+        "LW-204-023",
+        "LW-204-024",
+        "LW-204-025"
+      ]
+    }
+  ]
+}
