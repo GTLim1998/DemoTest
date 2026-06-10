@@ -12,7 +12,7 @@ namespace WebApplication1.Controllers
         ];
 
         [HttpGet(Name = "TestingAPI22555")]
-        public IEnumerable<WeatherForecast> Get()
+        public IEnumerable<WeatherForecast> GetTestingAPI()
         {
             return Enumerable.Range(1, 5).Select(index => new WeatherForecast
             {
