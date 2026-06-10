@@ -24,8 +24,8 @@ public sealed class ConversationApiClient : IConversationApiClient
 {
     private const string AuthUrl = "https://meshstage.lessen.com/auth/token";
     private const string ConversationBaseUrl = "https://meshstage.lessen.com/onebrain/conversation";
-    private const string Username = "oneom";
-    private const string Password = "AIHackthonTeam2@";
+    private const string Username = "tailim.goh";
+    private const string Password = "123123456789Az@";
     private const string TokenCacheKey = "onebrain-bearer-token";
     private static readonly SemaphoreSlim TokenRefreshLock = new(1, 1);
     private static readonly TimeSpan FallbackTokenLifetime = TimeSpan.FromMinutes(25);
