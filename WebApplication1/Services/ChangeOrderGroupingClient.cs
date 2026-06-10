@@ -420,18 +420,137 @@ query getChangeOrderDetail($projectId: Int!, $id: Int!) {
         JsonNode projectScopeList,
         JsonArray changeOrderDetails)
     {
+        var compactProjectScopeList = BuildCompactProjectScopeList(projectScopeList);
+        var compactChangeOrderDetails = BuildCompactChangeOrderDetails(changeOrderDetails);
+        var inputData = new JsonObject
+        {
+            ["projectId"] = projectId,
+            ["projectScopeList"] = compactProjectScopeList.DeepClone(),
+            ["changeOrderDetails"] = compactChangeOrderDetails.DeepClone()
+        };
+
         return new JsonObject
         {
             ["instruction"] = null,
             ["template"] = null,
-            ["text"] = "You are a change-order bundling agent. Use only the fetched GraphQL data in states. Convert change order line items into the frontend bundling JSON format. Group line items by serviceCombo.tradeName when trade ownership is clearest, or by serviceCombo.serviceCategoryName when that produces a better customer-facing bundle. Return valid JSON only. The top-level format must include run_id, agent, agent_version, project_id, trigger, generated_at, timezone, status, confidence, summary, requires_approval, and payload.scopes. Each scope must include scope_id, scope_name, total_line_works, analyzed_line_works, coverage, bundles, and unassigned_line_work_ids. Each bundle must include bundle_id, title, trade, trade_display, line_work_ids, reason, grouping_factors, confidence, estimated_hours, and suggested_sequence. Use changeOrder.id as scope_id like change-order-32466, changeOrder.description as scope_name, and line item ids as strings inside line_work_ids. Do not invent line items.",
+            ["text"] = "You are a change-order bundling agent. Use only the INPUT DATA below. Convert change order line items into the frontend bundling JSON format. Return valid JSON only, no markdown. The top-level format must include run_id, agent, agent_version, project_id, trigger, generated_at, timezone, status, confidence, summary, requires_approval, and payload.scopes. IMPORTANT: project_id must equal INPUT DATA projectId as a string. Create one payload.scopes entry per INPUT DATA changeOrderDetails[].changeOrder.id. scope_id must be change-order-{changeOrder.id}. scope_name must be changeOrder.description, or Change Order {changeOrder.orderNum} if description is missing. Each scope must contain only the line items from that same changeOrder.lineItems array. Group line items by serviceCombo.tradeName when trade ownership is clearest, or by serviceCombo.serviceCategoryName when that produces a better customer-facing bundle. Each scope must include scope_id, scope_name, total_line_works, analyzed_line_works, coverage, bundles, and unassigned_line_work_ids. Each bundle must include bundle_id, title, trade, trade_display, line_work_ids, reason, grouping_factors, confidence, estimated_hours, and suggested_sequence. Use line item ids as strings inside line_work_ids. Do not invent scope ids, line items, trades, or costs. Never return empty project_id or empty payload.scopes if INPUT DATA contains change orders. INPUT DATA:\n" + inputData.ToJsonString(),
             ["states"] = new JsonArray
             {
                 new JsonObject { ["key"] = "projectId", ["value"] = projectId },
-                new JsonObject { ["key"] = "projectScopeList", ["value"] = projectScopeList.DeepClone() },
-                new JsonObject { ["key"] = "changeOrderDetails", ["value"] = changeOrderDetails.DeepClone() }
+                new JsonObject { ["key"] = "projectScopeList", ["value"] = compactProjectScopeList },
+                new JsonObject { ["key"] = "changeOrderDetails", ["value"] = compactChangeOrderDetails }
             }
         };
+    }
+
+    private static JsonNode BuildCompactProjectScopeList(JsonNode projectScopeList)
+    {
+        var project = projectScopeList["data"]?["project"];
+        var output = new JsonObject
+        {
+            ["project"] = new JsonObject
+            {
+                ["id"] = project?["id"]?.DeepClone(),
+                ["expectedCompletionDate"] = project?["expectedCompletionDate"]?.DeepClone(),
+                ["isLessenEstimate"] = project?["isLessenEstimate"]?.DeepClone(),
+                ["scope"] = project?["scope"]?.DeepClone(),
+                ["changeOrderList"] = new JsonArray()
+            }
+        };
+
+        var changeOrderList = project?["changeOrderList"]?.AsArray();
+        if (changeOrderList is null)
+        {
+            return output;
+        }
+
+        var compactList = output["project"]?["changeOrderList"]?.AsArray();
+        foreach (var changeOrder in changeOrderList)
+        {
+            compactList?.Add(new JsonObject
+            {
+                ["id"] = changeOrder?["id"]?.DeepClone(),
+                ["description"] = changeOrder?["description"]?.DeepClone(),
+                ["orderNum"] = changeOrder?["orderNum"]?.DeepClone(),
+                ["status"] = changeOrder?["status"]?["name"]?.DeepClone(),
+                ["vendorCost"] = changeOrder?["vendorCost"]?.DeepClone(),
+                ["clientNetPrice"] = changeOrder?["clientNetPrice"]?.DeepClone(),
+                ["profit"] = changeOrder?["profit"]?.DeepClone(),
+                ["margin"] = changeOrder?["margin"]?.DeepClone()
+            });
+        }
+
+        return output;
+    }
+
+    private static JsonArray BuildCompactChangeOrderDetails(JsonArray changeOrderDetails)
+    {
+        var output = new JsonArray();
+
+        foreach (var detail in changeOrderDetails)
+        {
+            var changeOrder = detail?["data"]?["changeOrder"];
+            if (changeOrder is null)
+            {
+                continue;
+            }
+
+            var lineItems = new JsonArray();
+            foreach (var lineItem in changeOrder["changeOrderLineItemList"]?.AsArray() ?? new JsonArray())
+            {
+                lineItems.Add(new JsonObject
+                {
+                    ["id"] = lineItem?["id"]?.DeepClone(),
+                    ["description"] = lineItem?["description"]?.DeepClone(),
+                    ["qty"] = lineItem?["qty"]?.DeepClone(),
+                    ["uom"] = lineItem?["uom"]?.DeepClone(),
+                    ["unitCost"] = lineItem?["unitCost"]?.DeepClone(),
+                    ["totalCost"] = lineItem?["totalCost"]?.DeepClone(),
+                    ["clientPrice"] = lineItem?["clientPrice"]?.DeepClone(),
+                    ["clientNetPrice"] = lineItem?["clientNetPrice"]?.DeepClone(),
+                    ["profit"] = lineItem?["profit"]?.DeepClone(),
+                    ["margin"] = lineItem?["margin"]?.DeepClone(),
+                    ["scopeArea"] = new JsonObject
+                    {
+                        ["id"] = lineItem?["scopeArea"]?["id"]?.DeepClone(),
+                        ["name"] = lineItem?["scopeArea"]?["name"]?.DeepClone()
+                    },
+                    ["bundle"] = new JsonObject
+                    {
+                        ["id"] = lineItem?["bundle"]?["id"]?.DeepClone(),
+                        ["name"] = lineItem?["bundle"]?["name"]?.DeepClone()
+                    },
+                    ["serviceCombo"] = new JsonObject
+                    {
+                        ["serviceCategoryName"] = lineItem?["serviceCombo"]?["serviceCategoryName"]?.DeepClone(),
+                        ["serviceTypeName"] = lineItem?["serviceCombo"]?["serviceTypeName"]?.DeepClone(),
+                        ["serviceCodeName"] = lineItem?["serviceCombo"]?["serviceCodeName"]?.DeepClone(),
+                        ["tradeName"] = lineItem?["serviceCombo"]?["tradeName"]?.DeepClone()
+                    },
+                    ["status"] = lineItem?["status"]?["name"]?.DeepClone(),
+                    ["approvalStatus"] = lineItem?["changeOrderApprovalStatus"]?["name"]?.DeepClone(),
+                    ["predictionStatus"] = lineItem?["predictionStatus"]?["name"]?.DeepClone()
+                });
+            }
+
+            output.Add(new JsonObject
+            {
+                ["changeOrder"] = new JsonObject
+                {
+                    ["id"] = changeOrder["id"]?.DeepClone(),
+                    ["orderNum"] = changeOrder["orderNum"]?.DeepClone(),
+                    ["description"] = changeOrder["description"]?.DeepClone(),
+                    ["status"] = changeOrder["status"]?["name"]?.DeepClone(),
+                    ["clientNetPrice"] = changeOrder["clientNetPrice"]?.DeepClone(),
+                    ["vendorCost"] = changeOrder["vendorCost"]?.DeepClone(),
+                    ["profit"] = changeOrder["profit"]?.DeepClone(),
+                    ["margin"] = changeOrder["margin"]?.DeepClone(),
+                    ["lineItems"] = lineItems
+                }
+            });
+        }
+
+        return output;
     }
 
     private static List<int> ExtractChangeOrderIds(JsonNode projectScopeList, int? requestedChangeOrderId)
