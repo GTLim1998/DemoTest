@@ -17,6 +17,7 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Services.AddMemoryCache();
 builder.Services.AddHttpClient<IConversationApiClient, ConversationApiClient>();
+builder.Services.AddHttpClient<IChangeOrderGroupingClient, ChangeOrderGroupingClient>();
 
 var app = builder.Build();
 
