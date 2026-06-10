@@ -1,6 +1,14 @@
-@WebApplication1_HostAddress = http://localhost:5067
+@WebApplication1_HostAddress = http://localhost:5001
 
-GET {{WebApplication1_HostAddress}}/weatherforecast/
+POST {{WebApplication1_HostAddress}}/api/auth/token
 Accept: application/json
 
 ###
+
+POST {{WebApplication1_HostAddress}}/api/conversation/a865c08b-7c6e-4ae7-9f7a-51722f2c54ae/a313005d-b87b-4ac6-bf12-7109ce39a211
+Content-Type: application/json
+
+{
+  "text": "Hello, API!",
+  "states": []
+}
