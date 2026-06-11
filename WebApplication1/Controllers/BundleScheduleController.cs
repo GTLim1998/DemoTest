@@ -82,13 +82,7 @@ public sealed class BundleScheduleController : ControllerBase
     {
         var inputJson = JsonSerializer.Serialize(new { bundles = request.Bundles }, JsonOptions);
 
-        return
-            "Create a construction bundle schedule suggestion from the input JSON. " +
-            "Return valid JSON only. Do not include markdown or explanatory text. " +
-            "The response must match this top-level shape exactly: " +
-            "{\"bundles\":[{\"bundle_id\":\"string\",\"confidence\":0.0,\"suggested_sequence\":1,\"suggested_schedule\":{\"start_date\":\"yyyy-MM-dd\",\"end_date\":\"yyyy-MM-dd\",\"depends_on_bundle\":null,\"constraints_considered\":[{\"type\":\"string\",\"detail\":\"string\"}],\"reason\":\"string\"}}]}. " +
-            "Input JSON:\n" +
-            inputJson;
+        return inputJson;
     }
 
     private static bool TryConvertToBundleScheduleResponse(
