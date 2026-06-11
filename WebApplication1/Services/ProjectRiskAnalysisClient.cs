@@ -23,46 +23,6 @@ public sealed class ProjectRiskAnalysisClient : IProjectRiskAnalysisClient
 query getProjectList($input: ProjectListInput!) {
   projectList(input: $input) {
     id
-    projectNum
-    location {
-      id
-      addressLine1
-      addressLine2
-      city
-      state
-      dataZipCode {
-        olsonZoneName
-      }
-      market {
-        id
-        name
-      }
-      client {
-        id
-        name
-      }
-    }
-    status {
-      id
-      name
-    }
-    type {
-      id
-      name
-    }
-    clientNetPrice
-    assignee {
-      id
-      fullName
-    }
-    supervisor {
-      id
-      fullName
-    }
-    actualProjectStartDate
-    expectedCompletionDate
-    moveInDate
-    moveOutDate
   }
   projectListCount(input: $input)
 }";
@@ -73,106 +33,33 @@ query getProjectDetailsByIds($input: ProjectListInput!) {
     id
     name
     projectNum
-    clientNetPrice
-    tax
-    projectCost
-    isFPMRequired
-    vendorCost
-    margin
-    profit
-    estimateFee
     remark
     createDate
     estimateScheduledDate
     estimatedSubmittedDate
-    smsFinalApprovaDate
     committedStartDate
-    adjustedCommittedStartDate
     actualProjectStartDate
     expectedCompletionDate
-    adjustedCommittedCompletionDate
     completedDate
-    clientFinalSignOffDate
-    smsActualSignOffDate
-    propertyReceivedDate
     estimateStartDate
     estimateEndDate
-    isLessenEstimate
-    squareFootage
-    clientRefNumber
     moveInDate
     moveOutDate
     escalation {
-      id
       description
       escalationType {
-        id
         name
       }
     }
     type {
-      id
       name
     }
     status {
-      id
       name
     }
-    utility {
-      gas
-      electric
-      water
-    }
-    assignee {
-      id
-      fullName
-      phone
-      email
-    }
-    supervisor {
-      id
-      fullName
-      email
-      phone
-    }
-    location {
-      id
-      addressLine1
-      addressLine2
-      city
-      state
-      zipCode
-      region
-      district
-      market {
-        id
-        name
-      }
-      locationAttribute {
-        id
-        bedRooms
-        bathRooms
-      }
-      client {
-        id
-        name
-        email
-      }
-      dataZipCode {
-        id
-        olsonZoneName
-      }
-    }
-    scope {
-      id
-    }
-    bundleItemCount
-    openDate
     openDuration
-    leftDate
     leftDuration
     modifyDate
-    isTestProject
   }
 }";
 
@@ -386,7 +273,7 @@ query getProjectDetailsByIds($input: ProjectListInput!) {
             ["page"] = 1,
             ["pageSize"] = 4,
             ["orderBy"] = "createDate",
-            ["asc"] = false
+            ["asc"] = true
         };
     }
 
@@ -424,7 +311,6 @@ query getProjectDetailsByIds($input: ProjectListInput!) {
             var project = detailedProjectsById.TryGetValue(projectId, out var detailedProject)
                 ? detailedProject
                 : listProject;
-            var location = project?["location"];
             projects.Add(new JsonObject
             {
                 ["id"] = project?["id"]?.DeepClone(),
@@ -432,32 +318,14 @@ query getProjectDetailsByIds($input: ProjectListInput!) {
                 ["project_num"] = project?["projectNum"]?.DeepClone(),
                 ["status"] = project?["status"]?["name"]?.DeepClone(),
                 ["type"] = project?["type"]?["name"]?.DeepClone(),
-                ["client_net_price"] = project?["clientNetPrice"]?.DeepClone(),
-                ["tax"] = project?["tax"]?.DeepClone(),
-                ["project_cost"] = project?["projectCost"]?.DeepClone(),
-                ["vendor_cost"] = project?["vendorCost"]?.DeepClone(),
-                ["margin"] = project?["margin"]?.DeepClone(),
-                ["profit"] = project?["profit"]?.DeepClone(),
-                ["estimate_fee"] = project?["estimateFee"]?.DeepClone(),
                 ["remark"] = project?["remark"]?.DeepClone(),
-                ["is_fpm_required"] = project?["isFPMRequired"]?.DeepClone(),
-                ["is_lessen_estimate"] = project?["isLessenEstimate"]?.DeepClone(),
-                ["square_footage"] = project?["squareFootage"]?.DeepClone(),
-                ["assignee"] = project?["assignee"]?["fullName"]?.DeepClone(),
-                ["supervisor"] = project?["supervisor"]?["fullName"]?.DeepClone(),
                 ["create_date"] = project?["createDate"]?.DeepClone(),
                 ["estimate_scheduled_date"] = project?["estimateScheduledDate"]?.DeepClone(),
                 ["estimated_submitted_date"] = project?["estimatedSubmittedDate"]?.DeepClone(),
-                ["sms_final_approval_date"] = project?["smsFinalApprovaDate"]?.DeepClone(),
                 ["committed_start_date"] = project?["committedStartDate"]?.DeepClone(),
-                ["adjusted_committed_start_date"] = project?["adjustedCommittedStartDate"]?.DeepClone(),
                 ["actual_start_date"] = project?["actualProjectStartDate"]?.DeepClone(),
                 ["expected_completion_date"] = project?["expectedCompletionDate"]?.DeepClone(),
-                ["adjusted_committed_completion_date"] = project?["adjustedCommittedCompletionDate"]?.DeepClone(),
                 ["completed_date"] = project?["completedDate"]?.DeepClone(),
-                ["client_final_sign_off_date"] = project?["clientFinalSignOffDate"]?.DeepClone(),
-                ["sms_actual_sign_off_date"] = project?["smsActualSignOffDate"]?.DeepClone(),
-                ["property_received_date"] = project?["propertyReceivedDate"]?.DeepClone(),
                 ["estimate_start_date"] = project?["estimateStartDate"]?.DeepClone(),
                 ["estimate_end_date"] = project?["estimateEndDate"]?.DeepClone(),
                 ["move_in_date"] = project?["moveInDate"]?.DeepClone(),
@@ -469,37 +337,9 @@ query getProjectDetailsByIds($input: ProjectListInput!) {
                         ["type"] = escalation["escalationType"]?["name"]?.DeepClone()
                     }
                     : null,
-                ["utilities"] = project?["utility"] is JsonObject utility
-                    ? new JsonObject
-                    {
-                        ["gas"] = utility["gas"]?.DeepClone(),
-                        ["electric"] = utility["electric"]?.DeepClone(),
-                        ["water"] = utility["water"]?.DeepClone()
-                    }
-                    : null,
-                ["scope_id"] = project?["scope"]?["id"]?.DeepClone(),
-                ["bundle_item_count"] = project?["bundleItemCount"]?.DeepClone(),
-                ["open_date"] = project?["openDate"]?.DeepClone(),
                 ["open_duration"] = project?["openDuration"]?.DeepClone(),
-                ["left_date"] = project?["leftDate"]?.DeepClone(),
                 ["left_duration"] = project?["leftDuration"]?.DeepClone(),
-                ["modify_date"] = project?["modifyDate"]?.DeepClone(),
-                ["location"] = new JsonObject
-                {
-                    ["id"] = location?["id"]?.DeepClone(),
-                    ["address"] = JoinAddress(
-                        GetString(location?["addressLine1"]),
-                        GetString(location?["addressLine2"]),
-                        GetString(location?["city"]),
-                        GetString(location?["state"]),
-                        GetString(location?["zipCode"])),
-                    ["timezone"] = location?["dataZipCode"]?["olsonZoneName"]?.DeepClone(),
-                    ["market"] = location?["market"]?["name"]?.DeepClone(),
-                    ["client"] = location?["client"]?["name"]?.DeepClone(),
-                    ["client_email"] = location?["client"]?["email"]?.DeepClone(),
-                    ["bedrooms"] = location?["locationAttribute"]?["bedRooms"]?.DeepClone(),
-                    ["bathrooms"] = location?["locationAttribute"]?["bathRooms"]?.DeepClone()
-                }
+                ["modify_date"] = project?["modifyDate"]?.DeepClone()
             });
         }
 
@@ -547,9 +387,8 @@ query getProjectDetailsByIds($input: ProjectListInput!) {
         var expectedCompletion = GetString(project["expected_completion_date"]);
         var committedStart = GetString(project["committed_start_date"]);
         var actualStart = GetString(project["actual_start_date"]);
-        var supervisor = GetString(project["supervisor"]);
         var escalation = project["escalation"] as JsonObject;
-        var projectName = GetString(project["name"]) ?? GetString(project["project_num"]) ?? GetString(project["location"]?["address"]);
+        var projectName = GetString(project["name"]) ?? GetString(project["project_num"]);
 
         string? riskLevel = null;
         string? title = null;
@@ -558,39 +397,31 @@ query getProjectDetailsByIds($input: ProjectListInput!) {
 
         if (IsPastDue(expectedCompletion))
         {
-            riskLevel = "High Risk";
+            riskLevel = "1";
             title = "Project may miss completion date";
             description = $"Expected completion date has passed while status is {status}.";
             suggestion = "Confirm the updated completion plan and notify stakeholders if the date has changed.";
         }
         else if (IsPastDue(committedStart) && string.IsNullOrWhiteSpace(actualStart))
         {
-            riskLevel = "High Risk";
+            riskLevel = "1";
             title = "Committed start date missed";
             description = $"Committed start date has passed, but actual start date is still missing.";
             suggestion = "Confirm whether work has started and update the project start date.";
         }
         else if (escalation is not null)
         {
-            riskLevel = "High Risk";
+            riskLevel = "1";
             title = "Project has escalation";
             description = GetString(escalation["description"]) ?? "Project has an active escalation.";
             suggestion = "Review the escalation and assign the next owner for resolution.";
-        }
-        else if (string.IsNullOrWhiteSpace(supervisor) &&
-            !string.Equals(status, "Complete", StringComparison.OrdinalIgnoreCase))
-        {
-            riskLevel = "Medium Risk";
-            title = "Project missing supervisor";
-            description = $"Project is in {status} status but has no supervisor assigned.";
-            suggestion = "Assign a supervisor to own project coordination.";
         }
         else if (string.IsNullOrWhiteSpace(expectedCompletion) &&
             (status.Contains("Schedule", StringComparison.OrdinalIgnoreCase) ||
              status.Contains("Pending Client Scope", StringComparison.OrdinalIgnoreCase) ||
              status.Contains("NTP", StringComparison.OrdinalIgnoreCase)))
         {
-            riskLevel = "Medium Risk";
+            riskLevel = "2";
             title = "Project missing completion date";
             description = $"Project is in {status} status but has no expected completion date.";
             suggestion = "Set an expected completion date once the next project milestone is confirmed.";
