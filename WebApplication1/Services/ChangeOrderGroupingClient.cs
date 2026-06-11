@@ -201,11 +201,19 @@ query getChangeOrderDetail($projectId: Int!, $id: Int!) {
             BuildInstructionPayload(projectId, scopeId, compactChangeOrderDetails),
             cancellationToken);
 
+        var fallbackUsed = false;
         JsonNode? frontendPayload = null;
         if (groupingDecision is not null &&
             TryExtractGroupingDecision(groupingDecision, out var aiDecision))
         {
             frontendPayload = BuildFrontendPayload(projectId, scopeId, compactChangeOrderDetails, aiDecision);
+        }
+
+        if (frontendPayload is null)
+        {
+            fallbackUsed = true;
+            var fallbackDecision = BuildFallbackGroupingDecision(compactChangeOrderDetails);
+            frontendPayload = BuildFrontendPayload(projectId, scopeId, compactChangeOrderDetails, fallbackDecision);
         }
 
         if (debug)
@@ -221,6 +229,7 @@ query getChangeOrderDetail($projectId: Int!, $id: Int!) {
                 ["changeOrderDetails"] = changeOrderDetails.DeepClone(),
                 ["compactChangeOrderDetails"] = compactChangeOrderDetails.DeepClone(),
                 ["groupingDecision"] = groupingDecision?.DeepClone(),
+                ["fallbackUsed"] = fallbackUsed,
                 ["frontendPayload"] = frontendPayload?.DeepClone()
             }));
         }
@@ -231,7 +240,7 @@ query getChangeOrderDetail($projectId: Int!, $id: Int!) {
         }
 
         return ChangeOrderGroupingResult.Error(
-            "Grouping agent responded, but the response could not be parsed into the bundle decision format.",
+            "Failed to build grouping suggestion.",
             StatusCodes.Status502BadGateway,
             groupingDecision);
     }
@@ -621,6 +630,103 @@ query getChangeOrderDetail($projectId: Int!, $id: Int!) {
         }
 
         return ids;
+    }
+
+    private static JsonObject BuildFallbackGroupingDecision(JsonArray compactChangeOrderDetails)
+    {
+        var allLineItems = compactChangeOrderDetails
+            .SelectMany(detail => detail?["changeOrder"]?["lineItems"]?.AsArray() ?? new JsonArray())
+            .Where(item => item is JsonObject)
+            .Select(item => item!.AsObject())
+            .ToList();
+
+        var groupingField = ShouldFallbackGroupByCategory(allLineItems)
+            ? "category"
+            : "trade";
+
+        var groups = allLineItems
+            .GroupBy(item => ResolveFallbackGroupKey(item, groupingField), StringComparer.OrdinalIgnoreCase)
+            .Where(group => !string.IsNullOrWhiteSpace(group.Key))
+            .OrderBy(group => group.Key)
+            .ToList();
+
+        var bundles = new JsonArray();
+        var bundleIndex = 1;
+
+        foreach (var group in groups)
+        {
+            var lineItems = group.ToList();
+            var lineWorkIds = lineItems
+                .Select(item => GetString(item["id"]))
+                .Where(id => !string.IsNullOrWhiteSpace(id))
+                .Select(id => id!)
+                .ToList();
+
+            if (lineWorkIds.Count == 0)
+            {
+                continue;
+            }
+
+            var confidence = lineItems.Count == 1
+                ? 0.72
+                : HasSimilarServiceIntent(lineItems)
+                    ? 0.86
+                    : 0.8;
+
+            bundles.Add(new JsonObject
+            {
+                ["bundle_id"] = $"bundle-{bundleIndex}",
+                ["title"] = BuildBundleTitle(lineItems),
+                ["line_work_ids"] = ToJsonArray(lineWorkIds),
+                ["grouped_by"] = groupingField,
+                ["reason"] = groupingField == "category"
+                    ? "Fallback grouped by category for clearer customer-facing bundles."
+                    : "Fallback grouped by trade for shared vendor ownership.",
+                ["confidence"] = confidence
+            });
+
+            bundleIndex++;
+        }
+
+        return new JsonObject
+        {
+            ["bundles"] = bundles
+        };
+    }
+
+    private static bool ShouldFallbackGroupByCategory(List<JsonObject> lineItems)
+    {
+        var categoriesByTrade = lineItems
+            .GroupBy(item => GetString(item["serviceCombo"]?["tradeName"]) ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group
+                .Select(item => GetString(item["serviceCombo"]?["serviceCategoryName"]))
+                .Where(category => !string.IsNullOrWhiteSpace(category))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Count());
+
+        return categoriesByTrade.Any(categoryCount => categoryCount >= 3);
+    }
+
+    private static string ResolveFallbackGroupKey(JsonObject lineItem, string groupingField)
+    {
+        var serviceCombo = lineItem["serviceCombo"];
+        var key = groupingField == "category"
+            ? GetString(serviceCombo?["serviceCategoryName"])
+            : GetString(serviceCombo?["tradeName"]);
+
+        return key
+            ?? GetString(serviceCombo?["serviceCategoryName"])
+            ?? GetString(serviceCombo?["tradeName"])
+            ?? GetString(lineItem["id"])
+            ?? string.Empty;
+    }
+
+    private static bool HasSimilarServiceIntent(List<JsonObject> lineItems)
+    {
+        var types = DistinctNonEmpty(lineItems, item => GetString(item["serviceCombo"]?["serviceTypeName"]));
+        var categories = DistinctNonEmpty(lineItems, item => GetString(item["serviceCombo"]?["serviceCategoryName"]));
+
+        return types.Count <= 1 || categories.Count <= 1;
     }
 
     private static bool TryExtractGroupingDecision(JsonNode node, out JsonObject groupingDecision)
