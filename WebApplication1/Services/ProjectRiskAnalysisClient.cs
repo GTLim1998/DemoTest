@@ -260,7 +260,7 @@ query getProjectDetailsByIds($input: ProjectListInput!) {
     {
         return new JsonObject
         {
-            ["statusIds"] = new JsonArray(),
+            ["statusIds"] = new JsonArray(365, 370),
             ["id"] = null,
             ["locationAddress"] = string.Empty,
             ["states"] = new JsonArray(),
@@ -271,7 +271,7 @@ query getProjectDetailsByIds($input: ProjectListInput!) {
             ["clientIds"] = new JsonArray(clientId),
             ["isIncludeTestProject"] = false,
             ["page"] = 1,
-            ["pageSize"] = 4,
+            ["pageSize"] = 7,
             ["orderBy"] = "createDate",
             ["asc"] = true
         };
