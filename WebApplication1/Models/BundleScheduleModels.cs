@@ -43,7 +43,6 @@ public sealed record SuggestedSchedule(
     [property: JsonPropertyName("start_date")] string StartDate,
     [property: JsonPropertyName("end_date")] string EndDate,
     [property: JsonPropertyName("depends_on_bundle")] string? DependsOnBundle,
-    [property: JsonPropertyName("constraints_considered")] IReadOnlyList<ScheduleConstraint> ConstraintsConsidered,
     [property: JsonPropertyName("reason")] string Reason);
 
 public sealed record ScheduleConstraint(
