@@ -47,3 +47,13 @@ Content-Type: application/json
     }
   ]
 }
+
+###
+
+GET {{WebApplication1_HostAddress}}/api/projects/12345/risk
+Accept: application/json
+
+###
+
+GET {{WebApplication1_HostAddress}}/api/projects/12345/risk?debug=true
+Accept: application/json
