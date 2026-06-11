@@ -17,7 +17,6 @@ public interface IChangeOrderGroupingClient
 public sealed class ChangeOrderGroupingClient : IChangeOrderGroupingClient
 {
     private const string GraphQlApiUrl = "https://meshstage.smsassist.com/rehab-query-service/ui/graphql/";
-    private const string InstructionBaseUrl = "https://meshstage.lessen.com/onebrain/instruct";
     private const string GroupingAgentId = "35b7a6bd-1272-4ab9-8231-4b3c2f9a48d7";
 
     private const string ProjectScopeListQuery = @"
@@ -195,11 +194,19 @@ query getChangeOrderDetail($projectId: Int!, $id: Int!) {
                 });
         }
 
-        var groupingSuggestion = await CallConversationApiAsync(
+        var compactChangeOrderDetails = BuildCompactChangeOrderDetails(changeOrderDetails);
+        var groupingDecision = await CallConversationApiAsync(
             projectId,
             scopeId,
-            BuildInstructionPayload(projectId, scopeId, projectScopeList, changeOrderDetails),
+            BuildInstructionPayload(projectId, scopeId, compactChangeOrderDetails),
             cancellationToken);
+
+        JsonNode? frontendPayload = null;
+        if (groupingDecision is not null &&
+            TryExtractGroupingDecision(groupingDecision, out var aiDecision))
+        {
+            frontendPayload = BuildFrontendPayload(projectId, scopeId, compactChangeOrderDetails, aiDecision);
+        }
 
         if (debug)
         {
@@ -212,20 +219,21 @@ query getChangeOrderDetail($projectId: Int!, $id: Int!) {
                 ["changeOrderIds"] = JsonSerializer.SerializeToNode(changeOrderIds),
                 ["projectScopeList"] = projectScopeList.DeepClone(),
                 ["changeOrderDetails"] = changeOrderDetails.DeepClone(),
-                ["groupingSuggestion"] = groupingSuggestion?.DeepClone()
+                ["compactChangeOrderDetails"] = compactChangeOrderDetails.DeepClone(),
+                ["groupingDecision"] = groupingDecision?.DeepClone(),
+                ["frontendPayload"] = frontendPayload?.DeepClone()
             }));
         }
 
-        if (groupingSuggestion is not null &&
-            TryExtractFrontendPayload(groupingSuggestion, out var frontendPayload))
+        if (frontendPayload is not null)
         {
             return ChangeOrderGroupingResult.SuccessJson(frontendPayload.ToJsonString());
         }
 
         return ChangeOrderGroupingResult.Error(
-            "Grouping agent responded, but the response could not be parsed into the frontend bundle JSON format.",
+            "Grouping agent responded, but the response could not be parsed into the bundle decision format.",
             StatusCodes.Status502BadGateway,
-            groupingSuggestion);
+            groupingDecision);
     }
 
     private async Task<JsonNode?> CallGraphQlApiAsync(
@@ -312,28 +320,189 @@ query getChangeOrderDetail($projectId: Int!, $id: Int!) {
     private static JsonObject BuildInstructionPayload(
         int projectId,
         int? scopeId,
-        JsonNode projectScopeList,
-        JsonArray changeOrderDetails)
+        JsonArray compactChangeOrderDetails)
     {
-        var compactChangeOrderDetails = BuildCompactChangeOrderDetails(changeOrderDetails);
-        var compactChangeOrderDetailsJson = compactChangeOrderDetails.ToJsonString();
+        var aiInput = BuildAiInput(projectId, scopeId, compactChangeOrderDetails);
+        var aiInputJson = aiInput.ToJsonString();
 
         return new JsonObject
         {
             ["instruction"] = null,
             ["template"] = null,
-            ["text"] =
-                "PROJECT_ID:\n" +
-                projectId + "\n\n" +
-                "SCOPE_ID:\n" +
-                (scopeId?.ToString() ?? string.Empty) + "\n\n" +
-                "CHANGE_ORDER_DETAILS_JSON:\n" +
-                compactChangeOrderDetailsJson,
+            ["text"] = "BUNDLING_INPUT_JSON:\n" + aiInputJson,
             ["states"] = new JsonArray
             {
                 new JsonObject { ["key"] = "projectId", ["value"] = projectId },
                 new JsonObject { ["key"] = "scopeId", ["value"] = scopeId },
-                new JsonObject { ["key"] = "changeOrderDetails", ["value"] = compactChangeOrderDetails.DeepClone() }
+                new JsonObject { ["key"] = "bundlingInput", ["value"] = aiInput.DeepClone() }
+            }
+        };
+    }
+
+    private static JsonObject BuildAiInput(
+        int projectId,
+        int? scopeId,
+        JsonArray compactChangeOrderDetails)
+    {
+        var firstChangeOrder = compactChangeOrderDetails
+            .FirstOrDefault()?["changeOrder"];
+        var lineItems = new JsonArray();
+
+        foreach (var detail in compactChangeOrderDetails)
+        {
+            var changeOrder = detail?["changeOrder"];
+            if (changeOrder is null)
+            {
+                continue;
+            }
+
+            foreach (var lineItem in changeOrder["lineItems"]?.AsArray() ?? new JsonArray())
+            {
+                var serviceCombo = lineItem?["serviceCombo"];
+                lineItems.Add(new JsonObject
+                {
+                    ["id"] = GetString(lineItem?["id"]),
+                    ["description"] = Truncate(GetString(lineItem?["description"]), 160),
+                    ["area"] = GetString(lineItem?["scopeArea"]?["name"]),
+                    ["trade"] = GetString(serviceCombo?["tradeName"]),
+                    ["category"] = GetString(serviceCombo?["serviceCategoryName"]),
+                    ["type"] = GetString(serviceCombo?["serviceTypeName"]),
+                    ["code"] = GetString(serviceCombo?["serviceCodeName"]),
+                    ["qty"] = lineItem?["qty"]?.DeepClone(),
+                    ["uom"] = GetString(lineItem?["uom"])
+                });
+            }
+        }
+
+        return new JsonObject
+        {
+            ["project_id"] = projectId.ToString(),
+            ["scope_id"] = (scopeId ?? GetInt(firstChangeOrder?["id"]) ?? 0).ToString(),
+            ["scope_name"] = GetString(firstChangeOrder?["description"])
+                ?? $"Change Order {GetString(firstChangeOrder?["orderNum"]) ?? string.Empty}".Trim(),
+            ["line_items"] = lineItems
+        };
+    }
+
+    private static JsonNode BuildFrontendPayload(
+        int projectId,
+        int? scopeId,
+        JsonArray compactChangeOrderDetails,
+        JsonObject aiDecision)
+    {
+        var aiBundles = aiDecision["bundles"]?.AsArray() ?? new JsonArray();
+        var aiUnassigned = ReadStringArray(aiDecision["unassigned_line_work_ids"]).ToHashSet();
+        var scopes = new JsonArray();
+        var allBundleConfidences = new List<double>();
+        var totalBundleCount = 0;
+
+        foreach (var detail in compactChangeOrderDetails)
+        {
+            var changeOrder = detail?["changeOrder"];
+            if (changeOrder is null)
+            {
+                continue;
+            }
+
+            var effectiveScopeId = (scopeId ?? GetInt(changeOrder["id"]) ?? 0).ToString();
+            var sourceLineItems = changeOrder["lineItems"]?.AsArray() ?? new JsonArray();
+            var lineItemsById = sourceLineItems
+                .Where(item => item is not null)
+                .Select(item => item!.AsObject())
+                .Select(item => new { Id = GetString(item["id"]), Item = item })
+                .Where(item => !string.IsNullOrWhiteSpace(item.Id))
+                .ToDictionary(item => item.Id!, item => item.Item);
+
+            var bundles = new JsonArray();
+            var bundledIds = new HashSet<string>();
+            var sequence = 1;
+
+            foreach (var aiBundleNode in aiBundles)
+            {
+                if (aiBundleNode is not JsonObject aiBundle)
+                {
+                    continue;
+                }
+
+                var ids = ReadStringArray(aiBundle["line_work_ids"])
+                    .Where(lineItemsById.ContainsKey)
+                    .Distinct()
+                    .ToList();
+
+                if (ids.Count == 0)
+                {
+                    continue;
+                }
+
+                foreach (var id in ids)
+                {
+                    bundledIds.Add(id);
+                }
+
+                var groupedLineItems = ids.Select(id => lineItemsById[id]).ToList();
+                var confidence = GetDouble(aiBundle["confidence"]) ?? 0.8;
+                allBundleConfidences.Add(confidence);
+
+                bundles.Add(new JsonObject
+                {
+                    ["bundle_id"] = GetString(aiBundle["bundle_id"]) ?? $"bundle-{sequence}",
+                    ["title"] = GetString(aiBundle["title"]) ?? BuildBundleTitle(groupedLineItems),
+                    ["trade"] = Slugify(ResolveTradeDisplay(groupedLineItems, GetString(aiBundle["grouped_by"]))),
+                    ["trade_display"] = ResolveTradeDisplay(groupedLineItems, GetString(aiBundle["grouped_by"])),
+                    ["line_work_ids"] = ToJsonArray(ids),
+                    ["reason"] = GetString(aiBundle["reason"]) ?? "Grouped by similar work signals from the provided line items.",
+                    ["grouping_factors"] = BuildGroupingFactors(aiBundle, groupedLineItems),
+                    ["confidence"] = Math.Round(confidence, 2),
+                    ["estimated_hours"] = EstimateHours(groupedLineItems)
+                });
+
+                sequence++;
+                totalBundleCount++;
+            }
+
+            var unassignedIds = lineItemsById.Keys
+                .Where(id => !bundledIds.Contains(id) || aiUnassigned.Contains(id))
+                .Distinct()
+                .ToList();
+
+            scopes.Add(new JsonObject
+            {
+                ["scope_id"] = $"change-order-{effectiveScopeId}",
+                ["scope_name"] = GetString(changeOrder["description"])
+                    ?? $"Change Order {GetString(changeOrder["orderNum"]) ?? string.Empty}".Trim(),
+                ["total_line_works"] = lineItemsById.Count,
+                ["analyzed_line_works"] = lineItemsById.Count,
+                ["coverage"] = new JsonObject
+                {
+                    ["bundled"] = bundledIds.Count,
+                    ["unassigned"] = unassignedIds.Count
+                },
+                ["bundles"] = bundles,
+                ["unassigned_line_work_ids"] = ToJsonArray(unassignedIds)
+            });
+        }
+
+        var runScopeId = (scopeId ?? GetInt(compactChangeOrderDetails.FirstOrDefault()?["changeOrder"]?["id"]) ?? 0).ToString();
+        var averageConfidence = allBundleConfidences.Count == 0
+            ? 0
+            : Math.Round(allBundleConfidences.Average(), 2);
+
+        return new JsonObject
+        {
+            ["run_id"] = $"run_project_{projectId}_scope_{runScopeId}",
+            ["agent"] = "change-order-bundling-agent",
+            ["agent_version"] = "1.0.0",
+            ["project_id"] = projectId.ToString(),
+            ["trigger"] = "scope_synced",
+            ["generated_at"] = "2026-06-10T00:00:00Z",
+            ["timezone"] = "UTC",
+            ["status"] = "completed",
+            ["confidence"] = averageConfidence,
+            ["summary"] = $"Recommended {totalBundleCount} bundles for scope change-order-{runScopeId}.",
+            ["requires_approval"] = true,
+            ["payload"] = new JsonObject
+            {
+                ["scopes"] = scopes
             }
         };
     }
@@ -452,6 +621,333 @@ query getChangeOrderDetail($projectId: Int!, $id: Int!) {
         }
 
         return ids;
+    }
+
+    private static bool TryExtractGroupingDecision(JsonNode node, out JsonObject groupingDecision)
+    {
+        groupingDecision = new JsonObject();
+
+        if (LooksLikeGroupingDecision(node))
+        {
+            groupingDecision = node.DeepClone().AsObject();
+            return true;
+        }
+
+        if (node is JsonValue value && value.TryGetValue<string>(out var text))
+        {
+            return TryExtractGroupingDecisionFromText(text, out groupingDecision);
+        }
+
+        if (node is JsonObject obj)
+        {
+            foreach (var propertyName in new[] { "apiResult", "data", "text", "content", "message", "response", "result" })
+            {
+                if (obj[propertyName] is JsonNode child &&
+                    TryExtractGroupingDecision(child, out groupingDecision))
+                {
+                    return true;
+                }
+            }
+
+            foreach (var child in obj.Select(item => item.Value).Where(valueNode => valueNode is not null))
+            {
+                if (child is not null && TryExtractGroupingDecision(child, out groupingDecision))
+                {
+                    return true;
+                }
+            }
+        }
+
+        if (node is JsonArray array)
+        {
+            foreach (var item in array)
+            {
+                if (item is not null && TryExtractGroupingDecision(item, out groupingDecision))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryExtractGroupingDecisionFromText(string text, out JsonObject groupingDecision)
+    {
+        groupingDecision = new JsonObject();
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return false;
+        }
+
+        text = text.Trim();
+        foreach (var candidate in EnumerateJsonCandidates(text))
+        {
+            try
+            {
+                var node = JsonNode.Parse(candidate);
+                if (node is not null && LooksLikeGroupingDecision(node))
+                {
+                    groupingDecision = node.AsObject();
+                    return true;
+                }
+            }
+            catch (JsonException)
+            {
+                // Keep checking candidates.
+            }
+        }
+
+        return false;
+    }
+
+    private static bool LooksLikeGroupingDecision(JsonNode node)
+    {
+        return node is JsonObject obj && obj["bundles"] is JsonArray;
+    }
+
+    private static string? GetString(JsonNode? node)
+    {
+        if (node is null)
+        {
+            return null;
+        }
+
+        if (node is JsonValue value)
+        {
+            if (value.TryGetValue<string>(out var stringValue))
+            {
+                return stringValue;
+            }
+
+            if (value.TryGetValue<int>(out var intValue))
+            {
+                return intValue.ToString();
+            }
+
+            if (value.TryGetValue<long>(out var longValue))
+            {
+                return longValue.ToString();
+            }
+
+            if (value.TryGetValue<double>(out var doubleValue))
+            {
+                return doubleValue.ToString("0.##");
+            }
+        }
+
+        return node.ToJsonString();
+    }
+
+    private static int? GetInt(JsonNode? node)
+    {
+        if (node is null)
+        {
+            return null;
+        }
+
+        if (node is JsonValue value)
+        {
+            if (value.TryGetValue<int>(out var intValue))
+            {
+                return intValue;
+            }
+
+            if (value.TryGetValue<string>(out var stringValue) &&
+                int.TryParse(stringValue, out var parsedValue))
+            {
+                return parsedValue;
+            }
+        }
+
+        return null;
+    }
+
+    private static double? GetDouble(JsonNode? node)
+    {
+        if (node is null)
+        {
+            return null;
+        }
+
+        if (node is JsonValue value)
+        {
+            if (value.TryGetValue<double>(out var doubleValue))
+            {
+                return doubleValue;
+            }
+
+            if (value.TryGetValue<decimal>(out var decimalValue))
+            {
+                return (double)decimalValue;
+            }
+
+            if (value.TryGetValue<string>(out var stringValue) &&
+                double.TryParse(stringValue, out var parsedValue))
+            {
+                return parsedValue;
+            }
+        }
+
+        return null;
+    }
+
+    private static string? Truncate(string? value, int maxLength)
+    {
+        if (string.IsNullOrWhiteSpace(value) || value.Length <= maxLength)
+        {
+            return value;
+        }
+
+        return value[..maxLength].TrimEnd();
+    }
+
+    private static List<string> ReadStringArray(JsonNode? node)
+    {
+        if (node is not JsonArray array)
+        {
+            return new List<string>();
+        }
+
+        return array
+            .Select(GetString)
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => value!)
+            .ToList();
+    }
+
+    private static JsonArray ToJsonArray(IEnumerable<string> values)
+    {
+        var array = new JsonArray();
+        foreach (var value in values)
+        {
+            array.Add(value);
+        }
+
+        return array;
+    }
+
+    private static string ResolveTradeDisplay(List<JsonObject> lineItems, string? groupedBy)
+    {
+        var first = lineItems.FirstOrDefault();
+        if (first is null)
+        {
+            return "Mixed";
+        }
+
+        var trades = DistinctNonEmpty(lineItems, item => GetString(item["serviceCombo"]?["tradeName"]));
+        var categories = DistinctNonEmpty(lineItems, item => GetString(item["serviceCombo"]?["serviceCategoryName"]));
+
+        if (string.Equals(groupedBy, "category", StringComparison.OrdinalIgnoreCase) && categories.Count == 1)
+        {
+            return categories[0];
+        }
+
+        if (trades.Count == 1)
+        {
+            return trades[0];
+        }
+
+        if (categories.Count == 1)
+        {
+            return categories[0];
+        }
+
+        return "Mixed";
+    }
+
+    private static string BuildBundleTitle(List<JsonObject> lineItems)
+    {
+        var tradeDisplay = ResolveTradeDisplay(lineItems, null);
+        var areas = DistinctNonEmpty(lineItems, item => GetString(item["scopeArea"]?["name"]));
+        var types = DistinctNonEmpty(lineItems, item => GetString(item["serviceCombo"]?["serviceTypeName"]));
+        var titleParts = new List<string> { tradeDisplay };
+
+        if (types.Count == 1)
+        {
+            titleParts.Add(types[0]);
+        }
+
+        if (areas.Count == 1)
+        {
+            titleParts.Add($"work in {areas[0]}");
+        }
+
+        return string.Join(" - ", titleParts);
+    }
+
+    private static JsonArray BuildGroupingFactors(JsonObject aiBundle, List<JsonObject> lineItems)
+    {
+        var factors = new JsonArray();
+        var groupedBy = GetString(aiBundle["grouped_by"]);
+        if (!string.IsNullOrWhiteSpace(groupedBy))
+        {
+            factors.Add(groupedBy);
+        }
+
+        if (DistinctNonEmpty(lineItems, item => GetString(item["serviceCombo"]?["tradeName"])).Count == 1)
+        {
+            factors.Add("shared trade ownership");
+        }
+
+        if (DistinctNonEmpty(lineItems, item => GetString(item["scopeArea"]?["name"])).Count == 1)
+        {
+            factors.Add("same work area");
+        }
+
+        if (DistinctNonEmpty(lineItems, item => GetString(item["serviceCombo"]?["serviceCategoryName"])).Count == 1)
+        {
+            factors.Add("similar service category");
+        }
+
+        return factors;
+    }
+
+    private static double EstimateHours(List<JsonObject> lineItems)
+    {
+        var total = 0.0;
+        foreach (var lineItem in lineItems)
+        {
+            var uom = GetString(lineItem["uom"]);
+            if (uom is null ||
+                (!uom.Contains("hour", StringComparison.OrdinalIgnoreCase) &&
+                 !uom.Equals("hr", StringComparison.OrdinalIgnoreCase)))
+            {
+                continue;
+            }
+
+            total += GetDouble(lineItem["qty"]) ?? 0;
+        }
+
+        return Math.Round(total, 2);
+    }
+
+    private static List<string> DistinctNonEmpty(
+        IEnumerable<JsonObject> items,
+        Func<JsonObject, string?> selector)
+    {
+        return items
+            .Select(selector)
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => value!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private static string Slugify(string value)
+    {
+        var chars = value
+            .ToLowerInvariant()
+            .Select(ch => char.IsLetterOrDigit(ch) ? ch : '-')
+            .ToArray();
+
+        var slug = new string(chars);
+        while (slug.Contains("--", StringComparison.Ordinal))
+        {
+            slug = slug.Replace("--", "-", StringComparison.Ordinal);
+        }
+
+        return slug.Trim('-');
     }
 
     private static bool TryExtractFrontendPayload(JsonNode node, out JsonNode frontendPayload)
