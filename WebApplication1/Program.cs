@@ -18,6 +18,7 @@ builder.Services.AddSwaggerGen();
 builder.Services.AddMemoryCache();
 builder.Services.AddHttpClient<IConversationApiClient, ConversationApiClient>();
 builder.Services.AddHttpClient<IChangeOrderGroupingClient, ChangeOrderGroupingClient>();
+builder.Services.AddHttpClient<IProjectRiskAnalysisClient, ProjectRiskAnalysisClient>();
 
 var app = builder.Build();
 
