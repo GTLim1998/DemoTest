@@ -1,0 +1,11 @@
+services:
+  webapi:
+    build: .
+    container_name: webapplication1
+    ports:
+      # host:container — frontend keeps calling http://localhost:5001
+      - "5001:8080"
+    environment:
+      # Development keeps Swagger UI available at http://localhost:5001/swagger
+      - ASPNETCORE_ENVIRONMENT=Development
+    restart: unless-stopped
