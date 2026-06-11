@@ -90,6 +90,11 @@ query getChangeOrderDetail($projectId: Int!, $id: Int!) {
     description
     changeOrderLineItemList {
       id
+      bundle {
+        id
+        name
+        __typename
+      }
       description
       qty
       uom
@@ -571,6 +576,11 @@ query getChangeOrderDetail($projectId: Int!, $id: Int!) {
             var lineItems = new JsonArray();
             foreach (var lineItem in changeOrder["changeOrderLineItemList"]?.AsArray() ?? new JsonArray())
             {
+                if (HasBundleId(lineItem))
+                {
+                    continue;
+                }
+
                 lineItems.Add(new JsonObject
                 {
                     ["id"] = lineItem?["id"]?.DeepClone(),
@@ -592,6 +602,11 @@ query getChangeOrderDetail($projectId: Int!, $id: Int!) {
                 });
             }
 
+            if (lineItems.Count == 0)
+            {
+                continue;
+            }
+
             output.Add(new JsonObject
             {
                 ["changeOrder"] = new JsonObject
@@ -605,6 +620,12 @@ query getChangeOrderDetail($projectId: Int!, $id: Int!) {
         }
 
         return output;
+    }
+
+    private static bool HasBundleId(JsonNode? lineItem)
+    {
+        return lineItem?["bundle"]?["id"] is not null &&
+            !string.IsNullOrWhiteSpace(GetString(lineItem["bundle"]?["id"]));
     }
 
     private static List<int> ExtractChangeOrderIds(JsonNode projectScopeList, int? requestedChangeOrderId)
