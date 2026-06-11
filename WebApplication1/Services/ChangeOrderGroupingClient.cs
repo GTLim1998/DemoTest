@@ -9,7 +9,7 @@ public interface IChangeOrderGroupingClient
 {
     Task<ChangeOrderGroupingResult> GetGroupingSuggestionAsync(
         int projectId,
-        int? changeOrderId,
+        int? scopeId,
         bool debug,
         CancellationToken cancellationToken);
 }
@@ -83,146 +83,29 @@ query getProjectScopeList($projectId: Int!) {
 query getChangeOrderDetail($projectId: Int!, $id: Int!) {
   project(id: $projectId) {
     id
-    name
-    expectedCompletionDate
-    isLessenEstimate
-    squareFootage
-    contacts {
-      id
-      contactTypeId
-      email
-      __typename
-    }
-    location {
-      id
-      addressLine1
-      city
-      state
-      zipCode
-      imageUrl
-      market {
-        id
-        name
-        __typename
-      }
-      locationAttribute {
-        id
-        bedRooms
-        bathRooms
-        __typename
-      }
-      client {
-        id
-        email
-        __typename
-      }
-      __typename
-    }
     __typename
   }
   changeOrder(id: $id) {
     id
     orderNum
-    clientNetPrice
-    tax
-    vendorCost
-    margin
-    profit
-    reason {
-      id
-      name
-      __typename
-    }
     description
-    addedDays
-    isClientApprovalRequired
-    attachments {
-      id
-      __typename
-    }
-    channel {
-      id
-      __typename
-    }
-    status {
-      id
-      name
-      __typename
-    }
     changeOrderLineItemList {
       id
-      bundle {
-        id
-        name
-        __typename
-      }
-      isComparisonError
-      sourceType {
-        id
-        name
-        __typename
-      }
-      changeOrderApprovalStatus {
-        id
-        name
-        __typename
-      }
+      description
+      qty
+      uom
       scopeArea {
         id
         name
-        configAreaId
-        __typename
-      }
-      attachments {
-        id
         __typename
       }
       serviceCombo {
-        serviceItemId
-        serviceCategoryId
         serviceCategoryName
-        serviceTypeId
         serviceTypeName
-        serviceCodeId
         serviceCodeName
         tradeName
         __typename
       }
-      description
-      materials {
-        id
-        description
-        __typename
-      }
-      qty
-      unitCost
-      totalCost
-      margin
-      uom
-      profit
-      clientPrice
-      clientNetPrice
-      status {
-        id
-        name
-        __typename
-      }
-      predictionStatus {
-        id
-        name
-        __typename
-      }
-      __typename
-    }
-    changeOrderSource {
-      id
-      name
-      __typename
-    }
-    approvalUsers {
-      id
-      fullName
-      userName
       __typename
     }
     __typename
@@ -245,7 +128,7 @@ query getChangeOrderDetail($projectId: Int!, $id: Int!) {
 
     public async Task<ChangeOrderGroupingResult> GetGroupingSuggestionAsync(
         int projectId,
-        int? changeOrderId,
+        int? scopeId,
         bool debug,
         CancellationToken cancellationToken)
     {
@@ -266,7 +149,7 @@ query getChangeOrderDetail($projectId: Int!, $id: Int!) {
             return ChangeOrderGroupingResult.Error("Failed to fetch project scope and change order list.");
         }
 
-        var changeOrderIds = ExtractChangeOrderIds(projectScopeList, changeOrderId);
+        var changeOrderIds = ExtractChangeOrderIds(projectScopeList, scopeId);
         if (changeOrderIds.Count == 0)
         {
             return ChangeOrderGroupingResult.SuccessJson(JsonSerializer.Serialize(new
@@ -312,9 +195,10 @@ query getChangeOrderDetail($projectId: Int!, $id: Int!) {
                 });
         }
 
-        var groupingSuggestion = await CallInstructionApiAsync(
-            tokenResult.Token,
-            BuildInstructionPayload(projectId, projectScopeList, changeOrderDetails),
+        var groupingSuggestion = await CallConversationApiAsync(
+            projectId,
+            scopeId,
+            BuildInstructionPayload(projectId, scopeId, projectScopeList, changeOrderDetails),
             cancellationToken);
 
         if (debug)
@@ -324,6 +208,7 @@ query getChangeOrderDetail($projectId: Int!, $id: Int!) {
                 ["success"] = true,
                 ["message"] = "Successfully fetched project/change order data and generated grouping suggestion.",
                 ["projectId"] = projectId,
+                ["scopeId"] = scopeId,
                 ["changeOrderIds"] = JsonSerializer.SerializeToNode(changeOrderIds),
                 ["projectScopeList"] = projectScopeList.DeepClone(),
                 ["changeOrderDetails"] = changeOrderDetails.DeepClone(),
@@ -384,61 +269,71 @@ query getChangeOrderDetail($projectId: Int!, $id: Int!) {
         }
     }
 
-    private async Task<JsonNode?> CallInstructionApiAsync(
-        string token,
+    private async Task<JsonNode?> CallConversationApiAsync(
+        int projectId,
+        int? scopeId,
         JsonObject payload,
         CancellationToken cancellationToken)
     {
-        var url = $"{InstructionBaseUrl}/{GroupingAgentId}";
-
-        using var request = new HttpRequestMessage(HttpMethod.Post, url);
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-        request.Content = JsonContent.Create(payload);
-
         try
         {
-            using var response = await _httpClient.SendAsync(request, cancellationToken);
-            var content = await response.Content.ReadAsStringAsync(cancellationToken);
-
-            if (!response.IsSuccessStatusCode)
+            var text = payload["text"]?.GetValue<string>();
+            if (string.IsNullOrWhiteSpace(text))
             {
-                _logger.LogError("Instruction API failed with status {StatusCode}: {Content}", (int)response.StatusCode, content);
                 return null;
             }
 
-            return JsonNode.Parse(content) ?? JsonValue.Create(content);
+            var statesNode = payload["states"] ?? new JsonArray();
+            var states = JsonSerializer.SerializeToElement(statesNode);
+            var conversationId = $"project-{projectId}-scope-{scopeId?.ToString() ?? "all"}-{Guid.NewGuid():N}";
+
+            var result = await _conversationApiClient.CallConversationAsync(
+                conversationId,
+                text,
+                states,
+                GroupingAgentId,
+                cancellationToken);
+
+            return result switch
+            {
+                null => null,
+                JsonNode node => node.DeepClone(),
+                string content => JsonValue.Create(content),
+                _ => JsonSerializer.SerializeToNode(result)
+            };
         }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
+        catch (Exception ex) when (ex is TaskCanceledException or JsonException)
         {
-            _logger.LogError(ex, "Instruction API call failed.");
+            _logger.LogError(ex, "Conversation API call failed.");
             return null;
         }
     }
 
     private static JsonObject BuildInstructionPayload(
         int projectId,
+        int? scopeId,
         JsonNode projectScopeList,
         JsonArray changeOrderDetails)
     {
-        var compactProjectScopeList = BuildCompactProjectScopeList(projectScopeList);
         var compactChangeOrderDetails = BuildCompactChangeOrderDetails(changeOrderDetails);
-        var inputData = new JsonObject
-        {
-            ["projectId"] = projectId,
-            ["projectScopeList"] = compactProjectScopeList.DeepClone(),
-            ["changeOrderDetails"] = compactChangeOrderDetails.DeepClone()
-        };
+        var compactChangeOrderDetailsJson = compactChangeOrderDetails.ToJsonString();
 
         return new JsonObject
         {
             ["instruction"] = null,
             ["template"] = null,
-            ["text"] = "You are a change-order bundling agent. Use only the INPUT DATA below. Convert change order line items into the frontend bundling JSON format. Return valid JSON only, no markdown. The top-level format must include run_id, agent, agent_version, project_id, trigger, generated_at, timezone, status, confidence, summary, requires_approval, and payload.scopes. IMPORTANT: project_id must equal INPUT DATA projectId as a string. Create one payload.scopes entry per INPUT DATA changeOrderDetails[].changeOrder.id. scope_id must be change-order-{changeOrder.id}. scope_name must be changeOrder.description, or Change Order {changeOrder.orderNum} if description is missing. Each scope must contain only the line items from that same changeOrder.lineItems array. Group line items by serviceCombo.tradeName when trade ownership is clearest, or by serviceCombo.serviceCategoryName when that produces a better customer-facing bundle. Each scope must include scope_id, scope_name, total_line_works, analyzed_line_works, coverage, bundles, and unassigned_line_work_ids. Each bundle must include bundle_id, title, trade, trade_display, line_work_ids, reason, grouping_factors, confidence, estimated_hours, and suggested_sequence. Use line item ids as strings inside line_work_ids. Do not invent scope ids, line items, trades, or costs. Never return empty project_id or empty payload.scopes if INPUT DATA contains change orders. INPUT DATA:\n" + inputData.ToJsonString(),
+            ["text"] =
+                "PROJECT_ID:\n" +
+                projectId + "\n\n" +
+                "SCOPE_ID:\n" +
+                (scopeId?.ToString() ?? string.Empty) + "\n\n" +
+                "CHANGE_ORDER_DETAILS_JSON:\n" +
+                compactChangeOrderDetailsJson,
             ["states"] = new JsonArray
             {
                 new JsonObject { ["key"] = "projectId", ["value"] = projectId },
-                new JsonObject { ["key"] = "projectScopeList", ["value"] = compactProjectScopeList },
-                new JsonObject { ["key"] = "changeOrderDetails", ["value"] = compactChangeOrderDetails }
+                new JsonObject { ["key"] = "scopeId", ["value"] = scopeId },
+                new JsonObject { ["key"] = "changeOrderDetails", ["value"] = compactChangeOrderDetails.DeepClone() }
             }
         };
     }
@@ -504,21 +399,10 @@ query getChangeOrderDetail($projectId: Int!, $id: Int!) {
                     ["description"] = lineItem?["description"]?.DeepClone(),
                     ["qty"] = lineItem?["qty"]?.DeepClone(),
                     ["uom"] = lineItem?["uom"]?.DeepClone(),
-                    ["unitCost"] = lineItem?["unitCost"]?.DeepClone(),
-                    ["totalCost"] = lineItem?["totalCost"]?.DeepClone(),
-                    ["clientPrice"] = lineItem?["clientPrice"]?.DeepClone(),
-                    ["clientNetPrice"] = lineItem?["clientNetPrice"]?.DeepClone(),
-                    ["profit"] = lineItem?["profit"]?.DeepClone(),
-                    ["margin"] = lineItem?["margin"]?.DeepClone(),
                     ["scopeArea"] = new JsonObject
                     {
                         ["id"] = lineItem?["scopeArea"]?["id"]?.DeepClone(),
                         ["name"] = lineItem?["scopeArea"]?["name"]?.DeepClone()
-                    },
-                    ["bundle"] = new JsonObject
-                    {
-                        ["id"] = lineItem?["bundle"]?["id"]?.DeepClone(),
-                        ["name"] = lineItem?["bundle"]?["name"]?.DeepClone()
                     },
                     ["serviceCombo"] = new JsonObject
                     {
@@ -526,10 +410,7 @@ query getChangeOrderDetail($projectId: Int!, $id: Int!) {
                         ["serviceTypeName"] = lineItem?["serviceCombo"]?["serviceTypeName"]?.DeepClone(),
                         ["serviceCodeName"] = lineItem?["serviceCombo"]?["serviceCodeName"]?.DeepClone(),
                         ["tradeName"] = lineItem?["serviceCombo"]?["tradeName"]?.DeepClone()
-                    },
-                    ["status"] = lineItem?["status"]?["name"]?.DeepClone(),
-                    ["approvalStatus"] = lineItem?["changeOrderApprovalStatus"]?["name"]?.DeepClone(),
-                    ["predictionStatus"] = lineItem?["predictionStatus"]?["name"]?.DeepClone()
+                    }
                 });
             }
 
@@ -540,11 +421,6 @@ query getChangeOrderDetail($projectId: Int!, $id: Int!) {
                     ["id"] = changeOrder["id"]?.DeepClone(),
                     ["orderNum"] = changeOrder["orderNum"]?.DeepClone(),
                     ["description"] = changeOrder["description"]?.DeepClone(),
-                    ["status"] = changeOrder["status"]?["name"]?.DeepClone(),
-                    ["clientNetPrice"] = changeOrder["clientNetPrice"]?.DeepClone(),
-                    ["vendorCost"] = changeOrder["vendorCost"]?.DeepClone(),
-                    ["profit"] = changeOrder["profit"]?.DeepClone(),
-                    ["margin"] = changeOrder["margin"]?.DeepClone(),
                     ["lineItems"] = lineItems
                 }
             });
