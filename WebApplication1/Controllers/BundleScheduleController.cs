@@ -10,7 +10,8 @@ namespace WebApplication1.Controllers;
 public sealed class BundleScheduleController : ControllerBase
 {
     private const string ScheduleAgentId = "8184cf82-016b-4688-9534-8314bde6f384";
-    private const string ScheduleConversationId = "865b2494-e69d-41ce-bb19-980f1cc234a0";
+    //private const string ScheduleConversationId = "865b2494-e69d-41ce-bb19-980f1cc234a0";
+    
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -49,7 +50,7 @@ public sealed class BundleScheduleController : ControllerBase
 
         var text = BuildConversationText(request);
         var result = await _conversationApiClient.CallConversationAsync(
-            ScheduleConversationId,
+            Guid.NewGuid().ToString(),
             text,
             request.States.GetValueOrDefault(),
             ScheduleAgentId,
